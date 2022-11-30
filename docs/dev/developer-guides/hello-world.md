@@ -28,7 +28,7 @@ The testnet paymaster is just for testing. If you decide to build a project on m
 mkdir greeter-example
 cd greeter-example
 yarn init -y
-yarn add -D typescript ts-node ethers zksync-web3 hardhat @matterlabs/hardhat-zksync-solc @matterlabs/hardhat-zksync-deploy
+yarn add -D typescript ts-node ethers zksync-web3 hardhat @matterlabs/hardhat-zksync-vyper @matterlabs/hardhat-zksync-deploy @nomiclabs/hardhat-vyper
 ```
 
 Please note that Typescript is required by zkSync plugins.
@@ -36,19 +36,14 @@ Please note that Typescript is required by zkSync plugins.
 2. Create the `hardhat.config.ts` file and paste the following code there:
 
 ```typescript
-require("@matterlabs/hardhat-zksync-deploy");
-require("@matterlabs/hardhat-zksync-solc");
+import "@nomiclabs/hardhat-vyper";
+import "@matterlabs/hardhat-zksync-vyper";
+import "@matterlabs/hardhat-zksync-deploy";
 
 module.exports = {
-  zksolc: {
+  zkvyper: {
     version: "1.2.0",
     compilerSource: "binary",
-    settings: {
-      experimental: {
-        dockerImage: "matterlabs/zksolc",
-        tag: "v1.2.0",
-      },
-    },
   },
   zkSyncDeploy: {
     zkSyncNetwork: "https://zksync2-testnet.zksync.dev",
@@ -59,8 +54,8 @@ module.exports = {
       zksync: true,
     },
   },
-  solidity: {
-    version: "0.8.16",
+  vyper: {
+    version: "0.3.3",
   },
 };
 ```
@@ -73,30 +68,54 @@ If the contract was already compiled, you should delete the `artifacts-zk` and `
 
 1. Create the `contracts` and `deploy` folders. The former is the place where we will store all the smart contracts' `*.sol` files, and the latter is the place where we will put all the scripts related to deploying the contracts.
 
-2. Create the `contracts/Greeter.sol` contract and paste the following code in it:
+2. Create the `contracts/Greeter.vy` contract and paste the following code in it:
 
-```solidity
-//SPDX-License-Identifier: Unlicense
-pragma solidity ^0.8.0;
+```vyper
+# @version ^0.3.3
+# vim: ft=python
 
-contract Greeter {
-    string private greeting;
+owner: public(address)
+greeting: public(String[100])
 
-    constructor(string memory _greeting) {
-        greeting = _greeting;
-    }
+# __init__ is not called when deployed from create_forwarder_to
+@external
+def __init__():
+  self.owner = msg.sender
+  self.greeting = "Hola mundo"
 
-    function greet() public view returns (string memory) {
-        return greeting;
-    }
+# call once after create_forwarder_to
+@external
+def setup(_greeting: String[100]):
+  assert self.owner == ZERO_ADDRESS, "owner != zero address"
+  self.owner = msg.sender
+  self.greeting = _greeting
 
-    function setGreeting(string memory _greeting) public {
-        greeting = _greeting;
-    }
-}
+@external
+@view
+def greet() -> String[100]:
+    return self.greeting
+
 ```
 
-5. Compile the contract with the following command:
+3. Create the `contracts/CreateForwarder.vy` contract and paste the following code in it:
+```
+# @version ^0.3.3
+# vim: ft=python
+
+interface Greeter:
+    def setup(name: String[100]): nonpayable
+
+forwarder: public(address)
+
+@external
+def deploy(_masterCopy: address, _greeting: String[100]):
+    self.forwarder = create_forwarder_to(_masterCopy)
+    # Greeter.__init__ was not called, else this would fail
+    Greeter(self.forwarder).setup(_greeting)
+
+```
+
+4. Compile the contract with the following command:
 
 ```
 yarn hardhat compile
@@ -105,49 +124,50 @@ yarn hardhat compile
 6. Create the following deployment script in `deploy/deploy.ts`:
 
 ```typescript
+import { HardhatRuntimeEnvironment } from 'hardhat/types';
+import * as ethers from 'ethers';
 import { Wallet, Provider, utils } from "zksync-web3";
-import * as ethers from "ethers";
-import { HardhatRuntimeEnvironment } from "hardhat/types";
-import { Deployer } from "@matterlabs/hardhat-zksync-deploy";
+import { Deployer } from '@matterlabs/hardhat-zksync-deploy';
 
-// An example of a deploy script that will deploy and call a simple contract.
+// An example of a deploy script which will deploy and call a factory-like contract (meaning that the main contract
+// may deploy other contracts).
+//
+// In terms of presentation it's mostly copied from `001_deploy.ts`, so this example acts more like an integration test
+// for plugins/server capabilities.
 export default async function (hre: HardhatRuntimeEnvironment) {
-  console.log(`Running deploy script for the Greeter contract`);
+    console.log(`Running deploy script`);
 
-  // Initialize the wallet.
-  const provider = new Provider(hre.userConfig.zkSyncDeploy?.zkSyncNetwork);
-  const wallet = new Wallet("<WALLET-PRIVATE-KEY>");
+    // Initialize an Ethereum wallet.
+    const zkWallet = new Wallet("WALLET-PRIVATE-KEY");
 
-  // Create deployer object and load the artifact of the contract you want to deploy.
-  const deployer = new Deployer(hre, wallet);
-  const artifact = await deployer.loadArtifact("Greeter");
+    // Create deployer object and load desired artifact.
+    const deployer = new Deployer(hre, zkWallet);
 
-  // Estimate contract deployment fee
-  const greeting = "Hi there!";
-  const deploymentFee = await deployer.estimateDeployFee(artifact, [greeting]);
+    // Load the artifact we want to deploy.
+    const createForwarder = await deployer.loadArtifact('CreateForwarder');
+    const greeter = await deployer.loadArtifact('Greeter');
 
-  // Deposit funds to L2
-  const depositHandle = await deployer.zkWallet.deposit({
-    to: deployer.zkWallet.address,
-    token: utils.ETH_ADDRESS,
-    amount: deploymentFee.mul(2),
-  });
-  // Wait until the deposit is processed on zkSync
-  await depositHandle.wait();
+    // Deploy this contract. The returned object will be of a `Contract` type, similarly to ones in `ethers`.
+    // This contract has no constructor arguments.
+    const factoryContract = await deployer.deploy(createForwarder, []);
+    const greeterContract = await deployer.deploy(greeter, []);
 
-  // Deploy this contract. The returned object will be of a `Contract` type, similarly to ones in `ethers`.
-  // `greeting` is an argument for contract constructor.
-  const parsedFee = ethers.utils.formatEther(deploymentFee.toString());
-  console.log(`The deployment is estimated to cost ${parsedFee} ETH`);
+    // Deploy a forwarder to greeter from a factory
+    const forwarder = await factoryContract.deploy(greeterContract.address, "Hello world");
+    await forwarder.wait()
 
-  const greeterContract = await deployer.deploy(artifact, [greeting]);
+    // Show the contract info.
+    const forwarderAddress = await factoryContract.forwarder();
+    console.log(`${greeter.contractName} forwarder was deployed to ${forwarderAddress}!`);
 
-  //obtain the Constructor Arguments
-  console.log("constructor args:" + greeterContract.interface.encodeDeploy([greeting]));
-
-  // Show the contract info.
-  const contractAddress = greeterContract.address;
-  console.log(`${artifact.contractName} was deployed to ${contractAddress}`);
+    // Call the deployed contract.
+    const forwarderContract = new ethers.Contract(forwarderAddress, greeter.abi, deployer.zkWallet.provider);
+    const greeting = await forwarderContract.greet();
+    if (greeting == 'Hello world') {
+        console.log(`Everything worked!`);
+    } else {
+        throw new Error(`Contract said something unexpected: ${greeting}`);
+    }
 }
 ```
 
@@ -160,9 +180,7 @@ yarn hardhat deploy-zksync
 In the output, you should see the address to which the contract was deployed.
 
 Congratulations! You have deployed a smart contract to zkSync! Now you can visit the [zkSync block explorer](https://explorer.zksync.io/) and search your contract address to confirm it was successfully deployed.
-
-[This guide](../../api/tools/block-explorer/contract-verification.md) explains how to verify your smart contract using the zkSync block explorer.
-
+<!---
 ## Front-end integration
 
 ### Setting up the project
@@ -623,3 +641,4 @@ After the transaction is processed, the page updates the balances and the new gr
 
 - To learn more about `zksync-web3` SDK, check out its [documentation](../../api/js).
 - To learn more about the zkSync hardhat plugins, check out their [documentation](../../api/hardhat).
+--->
