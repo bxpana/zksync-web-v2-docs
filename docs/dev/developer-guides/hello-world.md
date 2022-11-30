@@ -18,7 +18,7 @@ The testnet paymaster is just for testing. If you decide to build a project on m
 ## Prerequisites
 
 - `yarn` package manager. [Here is the installation guide](https://yarnpkg.com/getting-started/install)(`npm` examples will be added soon.)
-- A wallet with sufficient Göerli `ETH` on L1 to pay for bridging funds to zkSync as well as deploying smart contracts. ERC20 tokens on zkSync are required if you want to implement the testnet paymaster. We recommend using [the faucet from the zkSync portal](https://portal.zksync.io/faucet).
+- A wallet with sufficient Göerli `ETH` on L2 to pay for deploying smart contracts. ERC20 tokens on zkSync are required if you want to implement the testnet paymaster. We recommend using [the faucet from the zkSync portal](https://portal.zksync.io/faucet).
 
 ## Initializing the project & deploying a smart contract
 
@@ -66,9 +66,9 @@ If the contract was already compiled, you should delete the `artifacts-zk` and `
 
 :::
 
-1. Create the `contracts` and `deploy` folders. The former is the place where we will store all the smart contracts' `*.sol` files, and the latter is the place where we will put all the scripts related to deploying the contracts.
+3. Create the `contracts` and `deploy` folders. The former is the place where we will store all the smart contracts' `*.sol` files, and the latter is the place where we will put all the scripts related to deploying the contracts.
 
-2. Create the `contracts/Greeter.vy` contract and paste the following code in it:
+4. Create the `contracts/Greeter.vy` contract and paste the following code in it:
 
 ```vyper
 # @version ^0.3.3
@@ -97,7 +97,7 @@ def greet() -> String[100]:
 
 ```
 
-3. Create the `contracts/CreateForwarder.vy` contract and paste the following code in it:
+5. Create the `contracts/CreateForwarder.vy` contract and paste the following code in it:
 ```
 # @version ^0.3.3
 # vim: ft=python
@@ -115,13 +115,13 @@ def deploy(_masterCopy: address, _greeting: String[100]):
 
 ```
 
-4. Compile the contract with the following command:
+6. Compile the contract with the following command:
 
 ```
 yarn hardhat compile
 ```
 
-6. Create the following deployment script in `deploy/deploy.ts`:
+7. Create the following deployment script in `deploy/deploy.ts`:
 
 ```typescript
 import { HardhatRuntimeEnvironment } from 'hardhat/types';
@@ -171,7 +171,7 @@ export default async function (hre: HardhatRuntimeEnvironment) {
 }
 ```
 
-7. Replacing the `WALLET-PRIVATE-KEY` with the `0x`-prefixed private key of the Ethereum wallet you're using for development, and run the script using the following command to run the deployment script:
+8. Replacing the `WALLET-PRIVATE-KEY` with the `0x`-prefixed private key of the Ethereum wallet you're using for development, and run the script using the following command to run the deployment script:
 
 ```
 yarn hardhat deploy-zksync
